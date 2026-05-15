@@ -179,12 +179,33 @@ pub fn get_song_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Song>> {
     }
 }
 
-/// 获取所有歌曲
+/// 获取所有歌曲（不含 cover_art BLOB，提升查询速度）
 pub fn get_all_songs(conn: &Connection) -> SqlResult<Vec<Song>> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, cover_art, bitrate, sample_rate, is_available, updated_at FROM songs WHERE is_available = 1 ORDER BY title"
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL as cover_art, bitrate, sample_rate, is_available, updated_at FROM songs WHERE is_available = 1 ORDER BY title"
     )?;
     let songs = stmt.query_map([], |row| map_song_row(row))?;
+    songs.collect()
+}
+
+/// 获取所有歌曲（仅基础字段，不含 cover_art，用于弹窗选择）
+pub fn get_all_songs_basic(conn: &Connection) -> SqlResult<Vec<Song>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL, bitrate, sample_rate, is_available, updated_at FROM songs WHERE is_available = 1 ORDER BY title"
+    )?;
+    let songs = stmt.query_map([], |row| map_song_row(row))?;
+    songs.collect()
+}
+
+/// 搜索歌曲（仅基础字段，不含 cover_art，用于弹窗选择）
+pub fn search_songs_basic(conn: &Connection, keyword: &str) -> SqlResult<Vec<Song>> {
+    let pattern = format!("%{}%", keyword);
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL, bitrate, sample_rate, is_available, updated_at FROM songs
+         WHERE is_available = 1 AND (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1)
+         ORDER BY title"
+    )?;
+    let songs = stmt.query_map([&pattern], |row| map_song_row(row))?;
     songs.collect()
 }
 
@@ -248,8 +269,9 @@ pub fn rename_playlist(conn: &Connection, id: i64, name: &str) -> SqlResult<()> 
     Ok(())
 }
 
-/// 删除播放列表
+/// 删除播放列表（先删除关联歌曲，再删除歌单本身）
 pub fn delete_playlist(conn: &Connection, id: i64) -> SqlResult<()> {
+    conn.execute("DELETE FROM playlist_songs WHERE playlist_id = ?1", [id])?;
     conn.execute("DELETE FROM playlists WHERE id = ?1", [id])?;
     Ok(())
 }

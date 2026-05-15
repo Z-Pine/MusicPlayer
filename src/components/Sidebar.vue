@@ -9,10 +9,10 @@
         <span class="nav-icon">🏠</span>
         <span>音乐库</span>
       </router-link>
-      <div class="nav-item" @click="openRecentPlays" style="cursor: pointer;">
+      <router-link to="/playlist/recent" class="nav-item" active-class="active">
         <span class="nav-icon">🕐</span>
         <span>最近播放</span>
-      </div>
+      </router-link>
       <router-link to="/settings" class="nav-item" active-class="active">
         <span class="nav-icon">⚙️</span>
         <span>设置</span>
@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlaylistItem } from "../stores/player";
@@ -53,6 +53,10 @@ async function fetchPlaylists() {
   } catch (e) {
     console.error("Failed to fetch playlists:", e);
   }
+}
+
+function onPlaylistsUpdated() {
+  fetchPlaylists();
 }
 
 async function createPlaylist() {
@@ -71,12 +75,13 @@ function openPlaylist(pl: PlaylistItem) {
   router.push(`/playlist/${pl.id}`);
 }
 
-function openRecentPlays() {
-  router.push("/playlist/recent");
-}
-
 onMounted(() => {
   fetchPlaylists();
+  window.addEventListener("playlists-updated", onPlaylistsUpdated);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("playlists-updated", onPlaylistsUpdated);
 });
 </script>
 

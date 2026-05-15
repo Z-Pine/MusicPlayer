@@ -20,6 +20,7 @@ pub fn run() {
             commands::remove_library_source,
             commands::get_library_sources,
             commands::get_all_songs,
+            commands::get_all_songs_basic,
             commands::get_song_by_id,
             commands::search_songs,
             commands::mark_song_unavailable,

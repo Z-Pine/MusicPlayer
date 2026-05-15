@@ -3,7 +3,6 @@ import {
   createShuffleIndices,
   getNextIndex,
   getPreviousIndex,
-  type PlayMode,
 } from "@/utils/playback";
 
 describe("createShuffleIndices", () => {

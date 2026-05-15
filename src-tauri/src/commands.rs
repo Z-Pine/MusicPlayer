@@ -41,6 +41,12 @@ pub fn get_all_songs(state: State<AppState>) -> Result<Vec<Song>, String> {
 }
 
 #[tauri::command]
+pub fn get_all_songs_basic(state: State<AppState>) -> Result<Vec<Song>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    database::get_all_songs_basic(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn get_song_by_id(state: State<AppState>, id: i64) -> Result<Option<Song>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     database::get_song_by_id(&conn, id).map_err(|e| e.to_string())
@@ -85,29 +91,29 @@ pub fn get_playlists(state: State<AppState>) -> Result<Vec<Playlist>, String> {
 }
 
 #[tauri::command]
-pub fn add_song_to_playlist(state: State<AppState>, playlist_id: i64, song_id: i64) -> Result<(), String> {
+pub fn add_song_to_playlist(state: State<AppState>, playlistId: i64, songId: i64) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    database::add_song_to_playlist(&conn, playlist_id, song_id).map_err(|e| e.to_string())
+    database::add_song_to_playlist(&conn, playlistId, songId).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn remove_song_from_playlist(state: State<AppState>, playlist_id: i64, song_id: i64) -> Result<(), String> {
+pub fn remove_song_from_playlist(state: State<AppState>, playlistId: i64, songId: i64) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    database::remove_song_from_playlist(&conn, playlist_id, song_id).map_err(|e| e.to_string())
+    database::remove_song_from_playlist(&conn, playlistId, songId).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_playlist_songs(state: State<AppState>, playlist_id: i64) -> Result<Vec<PlaylistSong>, String> {
+pub fn get_playlist_songs(state: State<AppState>, playlistId: i64) -> Result<Vec<PlaylistSong>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    database::get_playlist_songs(&conn, playlist_id).map_err(|e| e.to_string())
+    database::get_playlist_songs(&conn, playlistId).map_err(|e| e.to_string())
 }
 
 // ==================== Recent Plays Commands ====================
 
 #[tauri::command]
-pub fn record_recent_play(state: State<AppState>, song_id: i64) -> Result<(), String> {
+pub fn record_recent_play(state: State<AppState>, songId: i64) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    database::record_recent_play(&conn, song_id).map_err(|e| e.to_string())
+    database::record_recent_play(&conn, songId).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
