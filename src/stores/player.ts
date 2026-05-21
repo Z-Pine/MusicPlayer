@@ -277,7 +277,7 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
-  async function loadPlaybackState(): Promise<{ song: Song | null; shouldPlay: boolean }> {
+  async function restorePlaybackState() {
     try {
       const state = await invoke<{
         songId: number | null;
@@ -287,9 +287,12 @@ export const usePlayerStore = defineStore("player", () => {
         isPlaying: boolean;
       }>("load_playback_state_cmd");
 
+      // 恢复音量
       if (state.volume != null) {
         setVolume(state.volume);
       }
+      
+      // 恢复播放模式
       if (state.playMode) {
         const mode = state.playMode as typeof playMode.value;
         if (["sequence", "loop_list", "loop_single", "shuffle"].includes(mode)) {
@@ -297,16 +300,36 @@ export const usePlayerStore = defineStore("player", () => {
         }
       }
 
+      // 恢复歌曲和播放进度
       if (state.songId != null) {
         const song = await invoke<Song | null>("get_song_by_id", { id: state.songId });
         if (song) {
-          return { song, shouldPlay: false };
+          // 加载歌曲但不自动播放
+          loadSong(song, false);
+          
+          // 恢复播放进度
+          const positionSec = state.positionMs / 1000;
+          if (positionSec > 0 && howl) {
+            howl.seek(positionSec);
+            progress.value = positionSec;
+          }
+          
+          // 如果上次是播放状态，则继续播放
+          if (state.isPlaying && howl) {
+            // 延迟一下确保音频加载完成
+            setTimeout(() => {
+              if (howl) {
+                howl.play();
+              }
+            }, 100);
+          }
+          
+          console.log(`Restored playback: ${song.title} at ${positionSec.toFixed(1)}s`);
         }
       }
     } catch (e) {
-      console.error("Failed to load playback state:", e);
+      console.error("Failed to restore playback state:", e);
     }
-    return { song: null, shouldPlay: false };
   }
 
   function dispose() {
@@ -341,7 +364,7 @@ export const usePlayerStore = defineStore("player", () => {
     setPlaylist,
     playSong,
     savePlaybackState,
-    loadPlaybackState,
+    restorePlaybackState,
     dispose,
   };
 });

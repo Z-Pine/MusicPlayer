@@ -32,6 +32,7 @@
 import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useDialog } from "../composables/useDialog";
 
 interface LibrarySource {
   id: number;
@@ -42,6 +43,7 @@ interface LibrarySource {
 
 const defaultVolume = ref(0.8);
 const sources = ref<LibrarySource[]>([]);
+const dialog = useDialog();
 
 async function fetchSources() {
   try {
@@ -68,11 +70,23 @@ async function selectDir() {
 }
 
 async function removeSource(id: number) {
+  // 获取要删除的源路径用于确认对话框
+  const source = sources.value.find(s => s.id === id);
+  const sourcePath = source ? source.path : '该音乐库源';
+  
+  const confirmed = await dialog.warning(
+    `确定要删除音乐库源「${sourcePath}」吗？\n\n注意：这不会删除实际的音乐文件，只是从音乐库列表中移除。`,
+    '确认删除音乐库源'
+  );
+  
+  if (!confirmed) return;
+  
   try {
     await invoke("remove_library_source", { id });
     await fetchSources();
   } catch (e) {
     console.error("Failed to remove source:", e);
+    await dialog.error("删除音乐库源失败: " + String(e));
   }
 }
 
