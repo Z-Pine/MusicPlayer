@@ -71,6 +71,17 @@
     </div>
 
     <div class="song-list-container">
+      <!-- 歌曲列表工具栏 -->
+      <div class="song-list-toolbar" v-if="songs.length > 0 && !isRecent">
+        <button class="toolbar-btn select-all" @click="toggleSelectAll" :title="isAllSelected ? '取消全选' : '全选'">
+          <span class="select-icon">{{ isAllSelected ? '☑' : '☐' }}</span>
+          <span class="select-text">{{ isAllSelected ? '取消全选' : '全选' }}</span>
+        </button>
+        <span class="selected-count" v-if="selectedSongIds.size > 0">
+          已选中 {{ selectedSongIds.size }} 首歌曲
+        </span>
+      </div>
+      
       <div class="song-list" v-if="songs.length > 0">
         <div
           v-for="song in songs"
@@ -83,6 +94,7 @@
           }"
           @click="handleSongClick($event, song)"
           @dblclick="playSong(song)"
+          @contextmenu.prevent="openContextMenu($event, song)"
         >
           <div class="song-check">
             <div
@@ -104,7 +116,7 @@
             <button
               v-if="!isRecent"
               class="remove-btn"
-              @click.stop="removeSongs"
+              @click.stop="removeSongs(song.id)"
               :title="selectedSongIds.size > 0 ? `批量删除 ${selectedSongIds.size} 首` : '从歌单移除'"
             >
               ✕
@@ -118,10 +130,26 @@
       </div>
     </div>
 
+    <!-- 上下文菜单 -->
+    <div
+      v-if="contextMenu.visible"
+      class="context-menu"
+      :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+    >
+      <div class="context-menu-item" @click="playSongFromContext">播放</div>
+      <div class="context-menu-divider" v-if="!isRecent"></div>
+      <div class="context-menu-item" @click="removeSongsFromContext" v-if="!isRecent">从歌单移除</div>
+    </div>
+
+    <!-- Toast 提示 -->
+    <div v-if="toast.visible" class="toast" :class="{ show: toast.visible }">
+      {{ toast.message }}
+    </div>
+
     <!-- 添加歌曲弹窗 -->
-    <div v-if="addModalOpen" class="modal-overlay" @click="closeAddSongModal">
+    <div v-if="addModalOpen" class="modal-overlay" @click="closeAddSongModal" @keydown.esc="closeAddSongModal" @keydown.enter="confirmAddSongs">
       <div class="modal-content" @click.stop>
-        <h3 class="modal-title">添加歌曲到歌单</h3>
+        <h3 class="modal-title">添加歌曲到「{{ playlistName }}」</h3>
         <div class="modal-search">
           <input
             v-model="addModalSearch"
@@ -129,6 +157,9 @@
             class="modal-search-input"
             placeholder="搜索歌曲..."
             @input="onAddModalSearch"
+            @keydown.esc="closeAddSongModal"
+            @keydown.enter.prevent="confirmAddSongs"
+            ref="addModalSearchInput"
           />
         </div>
         <div class="modal-song-list">
@@ -165,7 +196,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { usePlayerStore } from "../stores/player";
@@ -191,10 +222,31 @@ const addModalSearchTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const addModalExistingSongIds = ref<Set<number>>(new Set());
 const addModalLoading = ref(false);
 const addModalError = ref("");
+const addModalSearchInput = ref<HTMLInputElement | null>(null);
 
 // 多选歌曲
 const selectedSongIds = ref<Set<number>>(new Set());
 const lastClickedId = ref<number | null>(null);
+
+// 上下文菜单
+const contextMenu = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  song: null as Song | null,
+});
+
+// Toast
+const toast = ref({ visible: false, message: "" });
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showToast(message: string) {
+  if (toastTimer) clearTimeout(toastTimer);
+  toast.value = { visible: true, message };
+  toastTimer = setTimeout(() => {
+    toast.value.visible = false;
+  }, 2500);
+}
 
 const isRecent = computed(() => route.params.id === "recent");
 const playlistId = computed(() => {
@@ -312,12 +364,49 @@ function handleSongClick(e: MouseEvent, song: Song) {
   }
 }
 
-async function removeSongs() {
+// 全选功能
+const isAllSelected = computed(() => {
+  if (songs.value.length === 0) return false;
+  return selectedSongIds.value.size === songs.value.length;
+});
+
+function toggleSelectAll() {
+  if (isAllSelected.value) {
+    // 取消全选
+    selectedSongIds.value.clear();
+  } else {
+    // 全选
+    selectedSongIds.value.clear();
+    songs.value.forEach(song => {
+      selectedSongIds.value.add(song.id);
+    });
+  }
+}
+
+async function removeSongs(songId?: number) {
   if (isRecent.value) return; // 最近播放不可删除
   if (playlistId.value === null) return;
   
-  const idsToRemove = Array.from(selectedSongIds.value);
-  if (idsToRemove.length === 0) return;
+  // 确定要删除的歌曲列表
+  let idsToRemove: number[];
+  
+  if (songId !== undefined) {
+    // 如果提供了 songId（从删除按钮调用）
+    // 检查该歌曲是否在选中列表中
+    if (selectedSongIds.value.has(songId) && selectedSongIds.value.size > 1) {
+      // 如果该歌曲在选中列表中，且选中了多首歌曲，则删除所有选中的（批量删除）
+      idsToRemove = Array.from(selectedSongIds.value);
+    } else {
+      // 否则只删除该歌曲（单个删除）
+      idsToRemove = [songId];
+    }
+  } else if (selectedSongIds.value.size > 0) {
+    // 如果没有提供 songId（从右键菜单调用），删除所有选中的歌曲
+    idsToRemove = Array.from(selectedSongIds.value);
+  } else {
+    // 既没有提供 songId，也没有选中的歌曲，直接返回
+    return;
+  }
 
   const confirmed = await dialog.confirm({
     title: '确认删除',
@@ -338,11 +427,51 @@ async function removeSongs() {
     }
     selectedSongIds.value.clear();
     await fetchSongs();
+    showToast(`已从歌单中移除 ${idsToRemove.length} 首歌曲`);
   } catch (e) {
     console.error("Failed to remove songs:", e);
     await dialog.error("删除失败: " + String(e));
   }
 }
+
+function openContextMenu(e: MouseEvent, song: Song) {
+  // 如果右键的歌曲不在已选列表中，则单独选中它
+  if (!selectedSongIds.value.has(song.id)) {
+    selectedSongIds.value.clear();
+    selectedSongIds.value.add(song.id);
+    lastClickedId.value = song.id;
+  }
+  contextMenu.value = {
+    visible: true,
+    x: e.clientX,
+    y: e.clientY,
+    song,
+  };
+}
+
+function playSongFromContext() {
+  if (contextMenu.value.song) {
+    playSong(contextMenu.value.song);
+  }
+  closeContextMenu();
+}
+
+async function removeSongsFromContext() {
+  closeContextMenu();
+  await removeSongs();
+}
+
+function closeContextMenu() {
+  contextMenu.value.visible = false;
+}
+
+// 点击空白处关闭菜单
+document.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  if (!target.closest(".context-menu")) {
+    closeContextMenu();
+  }
+});
 
 async function renamePlaylist() {
   if (playlistId.value === null) return;
@@ -398,6 +527,10 @@ async function openAddSongModal() {
   addModalExistingSongIds.value = new Set(songs.value.map((s) => s.id));
   // 自动加载全部歌曲
   await loadAddModalSongs();
+  // 自动聚焦到搜索框
+  setTimeout(() => {
+    addModalSearchInput.value?.focus();
+  }, 100);
 }
 
 function closeAddSongModal() {
@@ -479,8 +612,20 @@ watch(
   }
 );
 
+function onPlaylistSongsUpdated() {
+  // 当歌单歌曲更新时，重新加载歌曲列表
+  fetchSongs();
+}
+
 onMounted(() => {
   fetchSongs();
+  // 监听歌单更新事件
+  window.addEventListener("playlists-updated", onPlaylistSongsUpdated);
+});
+
+onUnmounted(() => {
+  // 移除事件监听
+  window.removeEventListener("playlists-updated", onPlaylistSongsUpdated);
 });
 </script>
 
@@ -635,6 +780,50 @@ onMounted(() => {
   flex-direction: column;
 }
 
+/* 歌曲列表工具栏 */
+.song-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: rgba(30, 41, 59, 0.5);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.toolbar-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.toolbar-btn .select-icon {
+  font-size: 16px;
+}
+
+.toolbar-btn .select-text {
+  font-weight: 500;
+}
+
+.selected-count {
+  font-size: 13px;
+  color: #94a3b8;
+  margin-left: auto;
+}
+
 .song-list {
   flex: 1;
   overflow-y: auto;
@@ -772,6 +961,8 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   min-width: 0;
+  max-width: 180px;
+  width: 180px;
 }
 
 .player-cover {
@@ -791,6 +982,7 @@ onMounted(() => {
 .player-meta {
   flex: 1;
   min-width: 0;
+  max-width: 120px;
 }
 
 .player-song-title {
@@ -800,6 +992,7 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .player-song-artist {
@@ -809,6 +1002,7 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .player-controls {
@@ -1216,5 +1410,59 @@ onMounted(() => {
 .modal-btn.confirm:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 上下文菜单 */
+.context-menu {
+  position: fixed;
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 6px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+}
+
+.context-menu-item {
+  padding: 8px 16px;
+  font-size: 14px;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.context-menu-item:hover {
+  background-color: rgba(59, 130, 246, 0.2);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background-color: rgba(255, 255, 255, 0.08);
+  margin: 4px 0;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background-color: #1e293b;
+  color: #e2e8f0;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  border: 1px solid #334155;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s, transform 0.3s;
+  z-index: 2000;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 </style>

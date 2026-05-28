@@ -19,6 +19,18 @@ let saveInterval: ReturnType<typeof setInterval> | null = null;
 onMounted(async () => {
   setDialogRef(dialogRef.value);
   
+  // 禁用默认右键菜单
+  document.addEventListener('contextmenu', (e) => {
+    // 只在非输入框元素上禁用
+    const target = e.target as HTMLElement;
+    if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+      // 如果不是自定义右键菜单触发的，则阻止默认行为
+      if (!target.closest('.song-item') && !target.closest('.context-menu')) {
+        e.preventDefault();
+      }
+    }
+  });
+  
   // 加载上次的播放状态
   await playerStore.restorePlaybackState();
   

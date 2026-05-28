@@ -304,6 +304,33 @@ export const usePlayerStore = defineStore("player", () => {
       if (state.songId != null) {
         const song = await invoke<Song | null>("get_song_by_id", { id: state.songId });
         if (song) {
+          // 加载音乐库所有歌曲作为播放列表
+          try {
+            const allSongs = await invoke<Song[]>("get_all_songs");
+            if (allSongs.length > 0) {
+              // 找到当前歌曲在列表中的位置
+              const songIndex = allSongs.findIndex(s => s.id === song.id);
+              if (songIndex >= 0) {
+                // 设置播放列表和当前索引
+                playlist.value = allSongs;
+                currentIndex.value = songIndex;
+              } else {
+                // 如果当前歌曲不在列表中，将其作为单曲播放列表
+                playlist.value = [song];
+                currentIndex.value = 0;
+              }
+            } else {
+              // 如果音乐库为空，将当前歌曲作为单曲播放列表
+              playlist.value = [song];
+              currentIndex.value = 0;
+            }
+          } catch (e) {
+            console.error("Failed to load all songs for playlist:", e);
+            // 出错时将当前歌曲作为单曲播放列表
+            playlist.value = [song];
+            currentIndex.value = 0;
+          }
+          
           // 加载歌曲但不自动播放
           loadSong(song, false);
           
@@ -324,7 +351,7 @@ export const usePlayerStore = defineStore("player", () => {
             }, 100);
           }
           
-          console.log(`Restored playback: ${song.title} at ${positionSec.toFixed(1)}s`);
+          console.log(`Restored playback: ${song.title} at ${positionSec.toFixed(1)}s, playlist size: ${playlist.value.length}`);
         }
       }
     } catch (e) {

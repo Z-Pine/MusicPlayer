@@ -480,38 +480,21 @@ onMounted(() => {
 
 /* 播放控制区 */
 .player-control-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-/* 播放控制区主体（蓝色边框内） */
-.player-control-section {
   display: grid;
-  grid-template-columns: minmax(140px, 180px) auto minmax(200px, 1fr) minmax(90px, 110px);
-  grid-template-areas: "info controls progress mode";
+  grid-template-columns: minmax(140px, 180px) auto minmax(200px, 1fr) minmax(90px, 110px) minmax(100px, 120px);
+  grid-template-areas: "info controls progress mode volume";
   align-items: center;
   gap: 16px;
   padding: 14px 18px;
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(30, 41, 59, 0.4) 100%);
   border-radius: 10px;
   border: 1px solid rgba(59, 130, 246, 0.2);
-  flex: 1;
-  min-width: 0;
-}
-
-/* 音量控制（蓝色边框外） */
-.player-volume-outer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 120px;
 }
 
 /* 歌曲列表容器 */
 .song-list-container {
   flex: 1;
-  margin: 24px 24px 24px 24px;
+  margin: 16px 24px 24px 24px;
   background: rgba(30, 41, 59, 0.3);
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -925,8 +908,6 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   min-width: 0;
-  max-width: 180px;
-  width: 180px;
 }
 
 .player-cover {
@@ -946,7 +927,6 @@ onMounted(() => {
 .player-meta {
   flex: 1;
   min-width: 0;
-  max-width: 120px;
 }
 
 .player-song-title {
@@ -956,7 +936,6 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
 }
 
 .player-song-artist {
@@ -966,7 +945,6 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
 }
 
 .player-controls {
@@ -1087,10 +1065,11 @@ onMounted(() => {
 }
 
 .player-volume-outer {
+  grid-area: volume;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 120px;
+  min-width: 0;
 }
 
 .volume-icon {
