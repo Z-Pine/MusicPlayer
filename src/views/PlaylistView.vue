@@ -80,6 +80,12 @@
         <span class="selected-count" v-if="selectedSongIds.size > 0">
           已选中 {{ selectedSongIds.size }} 首歌曲
         </span>
+        <span class="invalid-count" v-if="invalidSongCount > 0">
+          ⚠️ {{ invalidSongCount }} 首无效
+        </span>
+        <button class="toolbar-btn cleanup" @click="cleanupInvalidSongs" v-if="invalidSongCount > 0">
+          🗑️ 一键清理
+        </button>
       </div>
       
       <div class="song-list" v-if="songs.length > 0">
@@ -91,6 +97,8 @@
           :class="{
             playing: playerStore.currentSong?.id === song.id,
             selected: selectedSongIds.has(song.id),
+            'deleted-from-library': song.deletedFromLibrary,
+            'file-missing': !song.isAvailable && !song.deletedFromLibrary,
           }"
           @click="handleSongClick($event, song)"
           @dblclick="playSong(song)"
@@ -137,6 +145,7 @@
       :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
     >
       <div class="context-menu-item" @click="playSongFromContext">播放</div>
+      <div class="context-menu-item" @click="showSongInfo(contextMenu.song!)">属性</div>
       <div class="context-menu-divider" v-if="!isRecent"></div>
       <div class="context-menu-item" @click="removeSongsFromContext" v-if="!isRecent">从歌单移除</div>
     </div>
@@ -145,6 +154,9 @@
     <div v-if="toast.visible" class="toast" :class="{ show: toast.visible }">
       {{ toast.message }}
     </div>
+
+    <!-- 歌曲属性弹窗 -->
+    <SongInfoModal :visible="songInfoVisible" :song="songInfoSong" @close="songInfoVisible = false" />
 
     <!-- 添加歌曲弹窗 -->
     <div v-if="addModalOpen" class="modal-overlay" @click="closeAddSongModal" @keydown.esc="closeAddSongModal" @keydown.enter="confirmAddSongs">
@@ -203,11 +215,22 @@ import { usePlayerStore } from "../stores/player";
 import type { Song } from "../stores/player";
 import { formatDuration } from "../utils/format";
 import { useDialog } from "../composables/useDialog";
+import SongInfoModal from "../components/SongInfoModal.vue";
 
 const route = useRoute();
 const router = useRouter();
 const playerStore = usePlayerStore();
 const dialog = useDialog();
+
+// 歌曲属性弹窗
+const songInfoVisible = ref(false);
+const songInfoSong = ref<Song | null>(null);
+
+function showSongInfo(song: Song) {
+  songInfoSong.value = song;
+  songInfoVisible.value = true;
+  closeContextMenu();
+}
 
 const songs = ref<Song[]>([]);
 const playlistName = ref("");
@@ -247,6 +270,11 @@ function showToast(message: string) {
     toast.value.visible = false;
   }, 2500);
 }
+
+// 无效歌曲统计（已从音乐库删除或文件缺失）
+const invalidSongCount = computed(() =>
+  songs.value.filter(s => s.deletedFromLibrary || !s.isAvailable).length
+);
 
 const isRecent = computed(() => route.params.id === "recent");
 const playlistId = computed(() => {
@@ -331,7 +359,10 @@ async function fetchSongs() {
 }
 
 function playSong(song: Song) {
-  playerStore.playSong(song, songs.value);
+  const pid = playlistId.value;
+  const source = (isRecent.value || pid === null) ? undefined
+    : { type: 'playlist' as const, playlistId: pid, playlistName: playlistName.value };
+  playerStore.playSong(song, songs.value, source);
 }
 
 function toggleSelect(songId: number) {
@@ -612,6 +643,32 @@ watch(
   }
 );
 
+// 一键清理歌单中的无效歌曲
+async function cleanupInvalidSongs() {
+  const pid = playlistId.value;
+  if (isRecent.value || pid === null) return;
+
+  const confirmed = await dialog.confirm({
+    title: '确认清理',
+    message: `确定要清理歌单「${playlistName.value}」中的 ${invalidSongCount.value} 首无效歌曲吗？`,
+    type: 'warning',
+    confirmText: '清理',
+    cancelText: '取消',
+  });
+  if (!confirmed) return;
+
+  try {
+    const count = await invoke<number>("cleanup_playlist_invalid_songs", { playlistId: pid });
+    showToast(`已清理 ${count} 首无效歌曲`);
+    await fetchSongs();
+    // 通知侧边栏刷新
+    window.dispatchEvent(new CustomEvent("playlists-updated"));
+  } catch (e) {
+    console.error("Failed to cleanup playlist:", e);
+    await dialog.error("清理失败: " + String(e));
+  }
+}
+
 function onPlaylistSongsUpdated() {
   // 当歌单歌曲更新时，重新加载歌曲列表
   fetchSongs();
@@ -818,6 +875,23 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
+.toolbar-btn.cleanup {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.toolbar-btn.cleanup:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.invalid-count {
+  font-size: 13px;
+  color: #fbbf24;
+  margin-left: auto;
+}
+
 .selected-count {
   font-size: 13px;
   color: #94a3b8;
@@ -861,6 +935,25 @@ onUnmounted(() => {
 .song-item.playing .song-title {
   color: #3b82f6;
   font-weight: 600;
+}
+
+.song-item.deleted-from-library {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.song-item.deleted-from-library .song-title {
+  text-decoration: line-through;
+}
+
+.song-item.file-missing {
+  opacity: 0.6;
+}
+
+.song-item.file-missing .song-title::after {
+  content: " (文件缺失)";
+  font-size: 11px;
+  color: #fbbf24;
 }
 
 .song-check {

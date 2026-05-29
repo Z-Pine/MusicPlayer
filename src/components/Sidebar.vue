@@ -130,6 +130,9 @@
         <div class="now-playing-info">
           <div class="now-playing-title">{{ playerStore.currentSong.title }}</div>
           <div class="now-playing-artist">{{ playerStore.currentSong.artist }}</div>
+          <div class="now-playing-source">
+            📁 {{ playerStore.playSourceLabel }}
+          </div>
         </div>
       </div>
     </div>
@@ -661,6 +664,17 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.now-playing-source {
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* 右键菜单 */

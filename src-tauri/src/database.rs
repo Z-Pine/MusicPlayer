@@ -43,6 +43,7 @@ pub fn init_db() -> SqlResult<Connection> {
             bitrate INTEGER,
             sample_rate INTEGER,
             is_available INTEGER DEFAULT 1,
+            deleted_from_library INTEGER DEFAULT 0,
             updated_at INTEGER DEFAULT (strftime('%s', 'now'))
         );
 
@@ -109,6 +110,15 @@ pub fn init_db() -> SqlResult<Connection> {
         "#,
     )?;
 
+    // 数据库迁移：为 songs 表添加 deleted_from_library 列（兼容旧版数据库）
+    let has_column: bool = conn
+        .prepare("PRAGMA table_info(songs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|name| name.as_deref() == Ok("deleted_from_library"));
+    if !has_column {
+        conn.execute_batch("ALTER TABLE songs ADD COLUMN deleted_from_library INTEGER DEFAULT 0;")?;
+    }
+
     Ok(conn)
 }
 
@@ -150,17 +160,17 @@ pub fn get_library_sources(conn: &Connection) -> SqlResult<Vec<LibrarySource>> {
 /// 插入或更新歌曲
 pub fn upsert_song(conn: &Connection, song: &Song) -> SqlResult<i64> {
     conn.execute(
-        r#"INSERT INTO songs (path, title, artist, album, album_artist, year, genre, duration, cover_art, bitrate, sample_rate, is_available, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        r#"INSERT INTO songs (path, title, artist, album, album_artist, year, genre, duration, cover_art, bitrate, sample_rate, is_available, deleted_from_library, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(path) DO UPDATE SET
          title=excluded.title, artist=excluded.artist, album=excluded.album,
          album_artist=excluded.album_artist, year=excluded.year, genre=excluded.genre,
          duration=excluded.duration, cover_art=excluded.cover_art, bitrate=excluded.bitrate,
-         sample_rate=excluded.sample_rate, is_available=1, updated_at=excluded.updated_at"#,
+         sample_rate=excluded.sample_rate, is_available=1, deleted_from_library=0, updated_at=excluded.updated_at"#,
         rusqlite::params![
             song.path, song.title, song.artist, song.album, song.album_artist,
             song.year, song.genre, song.duration, song.cover_art, song.bitrate,
-            song.sample_rate, song.is_available as i32, song.updated_at
+            song.sample_rate, song.is_available as i32, song.deleted_from_library as i32, song.updated_at
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -169,7 +179,7 @@ pub fn upsert_song(conn: &Connection, song: &Song) -> SqlResult<i64> {
 /// 根据ID获取歌曲
 pub fn get_song_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Song>> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, cover_art, bitrate, sample_rate, is_available, updated_at FROM songs WHERE id = ?1"
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, cover_art, bitrate, sample_rate, is_available, deleted_from_library, updated_at FROM songs WHERE id = ?1"
     )?;
     let mut rows = stmt.query([id])?;
     if let Some(row) = rows.next()? {
@@ -182,7 +192,16 @@ pub fn get_song_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Song>> {
 /// 获取所有歌曲（不含 cover_art BLOB，提升查询速度）
 pub fn get_all_songs(conn: &Connection) -> SqlResult<Vec<Song>> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL as cover_art, bitrate, sample_rate, is_available, updated_at FROM songs WHERE is_available = 1 ORDER BY title"
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL as cover_art, bitrate, sample_rate, is_available, deleted_from_library, updated_at FROM songs WHERE deleted_from_library = 0 ORDER BY title"
+    )?;
+    let songs = stmt.query_map([], |row| map_song_row(row))?;
+    songs.collect()
+}
+
+/// 获取所有歌曲（包括已从音乐库删除的，用于歌单展示）
+pub fn get_all_songs_with_deleted(conn: &Connection) -> SqlResult<Vec<Song>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL as cover_art, bitrate, sample_rate, is_available, deleted_from_library, updated_at FROM songs ORDER BY title"
     )?;
     let songs = stmt.query_map([], |row| map_song_row(row))?;
     songs.collect()
@@ -191,7 +210,7 @@ pub fn get_all_songs(conn: &Connection) -> SqlResult<Vec<Song>> {
 /// 获取所有歌曲（仅基础字段，不含 cover_art，用于弹窗选择）
 pub fn get_all_songs_basic(conn: &Connection) -> SqlResult<Vec<Song>> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL, bitrate, sample_rate, is_available, updated_at FROM songs WHERE is_available = 1 ORDER BY title"
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL, bitrate, sample_rate, is_available, deleted_from_library, updated_at FROM songs WHERE deleted_from_library = 0 ORDER BY title"
     )?;
     let songs = stmt.query_map([], |row| map_song_row(row))?;
     songs.collect()
@@ -201,8 +220,8 @@ pub fn get_all_songs_basic(conn: &Connection) -> SqlResult<Vec<Song>> {
 pub fn search_songs_basic(conn: &Connection, keyword: &str) -> SqlResult<Vec<Song>> {
     let pattern = format!("%{}%", keyword);
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL, bitrate, sample_rate, is_available, updated_at FROM songs
-         WHERE is_available = 1 AND (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1)
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL, bitrate, sample_rate, is_available, deleted_from_library, updated_at FROM songs
+         WHERE deleted_from_library = 0 AND (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1)
          ORDER BY title"
     )?;
     let songs = stmt.query_map([&pattern], |row| map_song_row(row))?;
@@ -213,8 +232,8 @@ pub fn search_songs_basic(conn: &Connection, keyword: &str) -> SqlResult<Vec<Son
 pub fn search_songs(conn: &Connection, keyword: &str) -> SqlResult<Vec<Song>> {
     let pattern = format!("%{}%", keyword);
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, cover_art, bitrate, sample_rate, is_available, updated_at FROM songs
-         WHERE is_available = 1 AND (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1)
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, cover_art, bitrate, sample_rate, is_available, deleted_from_library, updated_at FROM songs
+         WHERE deleted_from_library = 0 AND (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1)
          ORDER BY title"
     )?;
     let songs = stmt.query_map([&pattern], |row| map_song_row(row))?;
@@ -230,10 +249,103 @@ pub fn mark_song_unavailable(conn: &Connection, path: &str) -> SqlResult<()> {
     Ok(())
 }
 
-/// 删除不可用的歌曲记录
-pub fn cleanup_unavailable_songs(conn: &Connection) -> SqlResult<usize> {
-    let count = conn.execute("DELETE FROM songs WHERE is_available = 0", [])?;
+/// 从音乐库删除歌曲（标记 deleted_from_library，不从磁盘删除）
+pub fn delete_song_from_library(conn: &Connection, id: i64) -> SqlResult<()> {
+    conn.execute(
+        "UPDATE songs SET deleted_from_library = 1 WHERE id = ?1",
+        [id],
+    )?;
+    Ok(())
+}
+
+/// 批量从音乐库删除歌曲
+pub fn batch_delete_songs_from_library(conn: &Connection, ids: &[i64]) -> SqlResult<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("UPDATE songs SET deleted_from_library = 1 WHERE id IN ({}) AND deleted_from_library = 0", placeholders);
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+    let count = stmt.execute(&*params)?;
     Ok(count)
+}
+
+/// 获取所有无效歌曲（文件不可用或已从音乐库删除）
+pub fn get_invalid_songs(conn: &Connection) -> SqlResult<Vec<Song>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, artist, album, album_artist, year, genre, duration, NULL as cover_art, bitrate, sample_rate, is_available, deleted_from_library, updated_at FROM songs
+         WHERE is_available = 0 OR deleted_from_library = 1"
+    )?;
+    let songs = stmt.query_map([], |row| map_song_row(row))?;
+    songs.collect()
+}
+
+/// 一键清理所有无效歌曲（从数据库中物理删除）
+pub fn cleanup_invalid_songs(conn: &Connection) -> SqlResult<usize> {
+    let count = conn.execute("DELETE FROM songs WHERE is_available = 0 OR deleted_from_library = 1", [])?;
+    Ok(count)
+}
+
+/// 检查歌曲文件是否存在（返回不存在的歌曲路径列表）
+pub fn check_songs_file_exists(conn: &Connection) -> SqlResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT path FROM songs WHERE deleted_from_library = 0")?;
+    let paths: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(0))?.collect::<SqlResult<Vec<_>>>()?;
+    
+    let mut missing_paths = Vec::new();
+    for path in paths {
+        if !std::path::Path::new(&path).exists() {
+            missing_paths.push(path);
+        }
+    }
+    Ok(missing_paths)
+}
+
+/// 获取歌单中已失效的歌曲数量
+pub fn get_playlist_invalid_song_count(conn: &Connection, playlist_id: i64) -> SqlResult<i64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM playlist_songs ps
+         JOIN songs s ON ps.song_id = s.id
+         WHERE ps.playlist_id = ?1 AND (s.is_available = 0 OR s.deleted_from_library = 1)",
+        [playlist_id],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// 清理歌单中已失效的歌曲
+pub fn cleanup_playlist_invalid_songs(conn: &Connection, playlist_id: i64) -> SqlResult<usize> {
+    let count = conn.execute(
+        "DELETE FROM playlist_songs WHERE playlist_id = ?1 AND song_id IN (
+            SELECT id FROM songs WHERE is_available = 0 OR deleted_from_library = 1
+        )",
+        [playlist_id],
+    )?;
+    Ok(count)
+}
+
+/// 获取所有歌单及其失效歌曲数量
+pub fn get_playlists_with_invalid_counts(conn: &Connection) -> SqlResult<Vec<(Playlist, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.name, p.created_at,
+                COUNT(CASE WHEN s.is_available = 0 OR s.deleted_from_library = 1 THEN 1 END) as invalid_count
+         FROM playlists p
+         LEFT JOIN playlist_songs ps ON p.id = ps.playlist_id
+         LEFT JOIN songs s ON ps.song_id = s.id
+         GROUP BY p.id, p.name, p.created_at
+         ORDER BY p.created_at"
+    )?;
+    let results = stmt.query_map([], |row| {
+        Ok((
+            Playlist {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+            },
+            row.get(3)?,
+        ))
+    })?;
+    results.collect()
 }
 
 fn map_song_row(row: &rusqlite::Row) -> SqlResult<Song> {
@@ -251,8 +363,37 @@ fn map_song_row(row: &rusqlite::Row) -> SqlResult<Song> {
         bitrate: row.get(10)?,
         sample_rate: row.get(11)?,
         is_available: row.get::<_, i32>(12)? != 0,
-        updated_at: row.get(13)?,
+        deleted_from_library: row.get::<_, i32>(13)? != 0,
+        updated_at: row.get(14)?,
     })
+}
+
+/// 批量检查文件完整性：遍历所有非删除歌曲，标记缺失/恢复的文件
+pub fn check_and_mark_invalid_files(conn: &Connection) -> rusqlite::Result<(i64, i64, i64)> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path FROM songs WHERE deleted_from_library = 0"
+    )?;
+    let paths: Vec<(i64, String)> = stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?.collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut marked_missing: i64 = 0;
+    let marked_restored: i64 = 0;
+
+    for (id, path) in &paths {
+        let exists = std::path::Path::new(path).exists();
+        // 标记缺失文件
+        conn.execute(
+            "UPDATE songs SET is_available = ?1 WHERE id = ?2 AND deleted_from_library = 0",
+            rusqlite::params![exists as i32, id],
+        )?;
+        if !exists {
+            marked_missing += 1;
+        }
+    }
+
+    let total = paths.len() as i64;
+    Ok((total, marked_missing, marked_restored))
 }
 
 // ==================== Playlists ====================
@@ -318,7 +459,7 @@ pub fn remove_song_from_playlist(conn: &Connection, playlist_id: i64, song_id: i
 pub fn get_playlist_songs(conn: &Connection, playlist_id: i64) -> SqlResult<Vec<PlaylistSong>> {
     let mut stmt = conn.prepare(
         "SELECT ps.playlist_id, ps.song_id, ps.position,
-                s.id, s.path, s.title, s.artist, s.album, s.album_artist, s.year, s.genre, s.duration, s.cover_art, s.bitrate, s.sample_rate, s.is_available, s.updated_at
+                s.id, s.path, s.title, s.artist, s.album, s.album_artist, s.year, s.genre, s.duration, NULL as cover_art, s.bitrate, s.sample_rate, s.is_available, s.deleted_from_library, s.updated_at
          FROM playlist_songs ps
          JOIN songs s ON ps.song_id = s.id
          WHERE ps.playlist_id = ?1
@@ -339,7 +480,8 @@ pub fn get_playlist_songs(conn: &Connection, playlist_id: i64) -> SqlResult<Vec<
             bitrate: row.get(13)?,
             sample_rate: row.get(14)?,
             is_available: row.get::<_, i32>(15)? != 0,
-            updated_at: row.get(16)?,
+            deleted_from_library: row.get::<_, i32>(16)? != 0,
+            updated_at: row.get(17)?,
         };
         Ok(PlaylistSong {
             playlist_id: row.get(0)?,
@@ -374,7 +516,7 @@ pub fn record_recent_play(conn: &Connection, song_id: i64) -> SqlResult<()> {
 pub fn get_recent_plays(conn: &Connection, limit: i64) -> SqlResult<Vec<RecentPlay>> {
     let mut stmt = conn.prepare(
         "SELECT r.song_id, r.played_at,
-                s.id, s.path, s.title, s.artist, s.album, s.album_artist, s.year, s.genre, s.duration, s.cover_art, s.bitrate, s.sample_rate, s.is_available, s.updated_at
+                s.id, s.path, s.title, s.artist, s.album, s.album_artist, s.year, s.genre, s.duration, NULL as cover_art, s.bitrate, s.sample_rate, s.is_available, s.deleted_from_library, s.updated_at
          FROM recent_plays r
          JOIN songs s ON r.song_id = s.id
          ORDER BY r.played_at DESC
@@ -395,7 +537,8 @@ pub fn get_recent_plays(conn: &Connection, limit: i64) -> SqlResult<Vec<RecentPl
             bitrate: row.get(12)?,
             sample_rate: row.get(13)?,
             is_available: row.get::<_, i32>(14)? != 0,
-            updated_at: row.get(15)?,
+            deleted_from_library: row.get::<_, i32>(15)? != 0,
+            updated_at: row.get(16)?,
         };
         Ok(RecentPlay {
             song_id: row.get(0)?,

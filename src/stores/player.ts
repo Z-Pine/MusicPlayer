@@ -22,8 +22,11 @@ export interface Song {
   bitrate?: number;
   sampleRate?: number;
   isAvailable: boolean;
+  deletedFromLibrary: boolean;
   updatedAt: number;
 }
+
+export type PlaySource = { type: 'library' } | { type: 'playlist'; playlistId: number; playlistName: string };
 
 export interface PlaylistItem {
   id: number;
@@ -49,6 +52,11 @@ export const usePlayerStore = defineStore("player", () => {
   const shufflePlayedCount = ref(0);
 
   const hasSong = computed(() => currentSong.value !== null);
+  const playSource = ref<PlaySource>({ type: 'library' });
+  const playSourceLabel = computed(() => {
+    if (playSource.value.type === 'library') return '音乐库';
+    return playSource.value.playlistName;
+  });
 
   function startProgressTimer() {
     stopProgressTimer();
@@ -76,6 +84,7 @@ export const usePlayerStore = defineStore("player", () => {
     }
     next();
   }
+
 
   function buildHowl(song: Song): Howl {
     // Windows 路径转义为 URL 格式
@@ -110,20 +119,23 @@ export const usePlayerStore = defineStore("player", () => {
       onend() {
         handleSongEnd();
       },
-      onloaderror(_id, error) {
-        console.error("Failed to load audio:", song.path, error);
-        isPlaying.value = false;
+      onloaderror(_id, _error) {
+        howl!.stop();
+        howl!.unload();
+        howl = null;
       },
     });
   }
 
   function loadSong(song: Song, autoPlay = true) {
+    stopProgressTimer();
+
+    // 停止并释放前一个播放器实例，防止多首歌同时播放
     if (howl) {
       howl.stop();
       howl.unload();
       howl = null;
     }
-    stopProgressTimer();
 
     currentSong.value = song;
     progress.value = 0;
@@ -173,23 +185,32 @@ export const usePlayerStore = defineStore("player", () => {
       shufflePlayedCount.value = 0;
     }
 
-    const result = getNextIndex(
-      playMode.value,
-      currentIndex.value,
-      playlist.value.length,
-      shuffledIndices.value,
-      shufflePlayedCount.value
-    );
+    // 循环查找下一首有效歌曲（最多尝试整个播放列表长度）
+    for (let attempt = 0; attempt < playlist.value.length; attempt++) {
+      const result = getNextIndex(
+        playMode.value,
+        currentIndex.value,
+        playlist.value.length,
+        shuffledIndices.value,
+        shufflePlayedCount.value
+      );
 
-    if (result.shouldStop) {
-      stop();
-      return;
+      if (result.shouldStop) {
+        stop();
+        return;
+      }
+
+      shufflePlayedCount.value = result.nextShuffleCount;
+      currentIndex.value = result.nextIndex;
+      const song = playlist.value[currentIndex.value];
+      if (song && song.isAvailable && !song.deletedFromLibrary) {
+        loadSong(song, true);
+        return;
+      }
     }
 
-    shufflePlayedCount.value = result.nextShuffleCount;
-    currentIndex.value = result.nextIndex;
-    const song = playlist.value[currentIndex.value];
-    if (song) loadSong(song, true);
+    // 所有歌曲都无效，停止播放
+    stop();
   }
 
   function previous() {
@@ -200,18 +221,26 @@ export const usePlayerStore = defineStore("player", () => {
       shufflePlayedCount.value = 0;
     }
 
-    const result = getPreviousIndex(
-      playMode.value,
-      currentIndex.value,
-      playlist.value.length,
-      shuffledIndices.value,
-      shufflePlayedCount.value
-    );
+    for (let attempt = 0; attempt < playlist.value.length; attempt++) {
+      const result = getPreviousIndex(
+        playMode.value,
+        currentIndex.value,
+        playlist.value.length,
+        shuffledIndices.value,
+        shufflePlayedCount.value
+      );
 
-    shufflePlayedCount.value = result.nextShuffleCount;
-    currentIndex.value = result.prevIndex;
-    const song = playlist.value[currentIndex.value];
-    if (song) loadSong(song, true);
+      shufflePlayedCount.value = result.nextShuffleCount;
+      currentIndex.value = result.prevIndex;
+      const song = playlist.value[currentIndex.value];
+      if (song && song.isAvailable && !song.deletedFromLibrary) {
+        loadSong(song, true);
+        return;
+      }
+    }
+
+    // 所有歌曲都无效，停止播放
+    stop();
   }
 
   function setVolume(v: number) {
@@ -238,17 +267,19 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
-  function setPlaylist(songs: Song[], startIndex = 0) {
+  function setPlaylist(songs: Song[], startIndex = 0, source?: PlaySource) {
     playlist.value = songs;
     currentIndex.value = startIndex;
     shuffledIndices.value = [];
     shufflePlayedCount.value = 0;
+    if (source) playSource.value = source;
     if (songs.length > 0) {
       loadSong(songs[startIndex], true);
     }
   }
 
-  function playSong(song: Song, allSongs: Song[] = []) {
+  function playSong(song: Song, allSongs: Song[] = [], source?: PlaySource) {
+    if (source) playSource.value = source;
     if (allSongs.length > 0) {
       const idx = allSongs.findIndex((s) => s.id === song.id);
       if (idx >= 0) {
@@ -378,6 +409,8 @@ export const usePlayerStore = defineStore("player", () => {
     currentIndex,
     playMode,
     hasSong,
+    playSource,
+    playSourceLabel,
     play,
     pause,
     togglePlay,

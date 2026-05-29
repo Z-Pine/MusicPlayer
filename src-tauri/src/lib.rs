@@ -24,6 +24,13 @@ pub fn run() {
             commands::get_song_by_id,
             commands::search_songs,
             commands::mark_song_unavailable,
+            commands::delete_song_from_library,
+            commands::batch_delete_songs_from_library,
+            commands::get_invalid_songs,
+            commands::cleanup_invalid_songs,
+            commands::check_songs_file_exists,
+            commands::check_and_mark_invalid_files,
+            commands::cleanup_playlist_invalid_songs,
             commands::create_playlist,
             commands::rename_playlist,
             commands::delete_playlist,
@@ -40,6 +47,8 @@ pub fn run() {
             commands::cache_lyrics_cmd,
             commands::get_cached_lyrics_cmd,
             commands::get_lyrics,
+            commands::get_file_info,
+            commands::open_file_location,
             commands::scan_library,
         ])
         .run(tauri::generate_context!())

@@ -9,6 +9,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue';
 import { setDialogRef } from './composables/useDialog';
 import { usePlayerStore } from './stores/player';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
 const dialogRef = ref();
 const playerStore = usePlayerStore();
@@ -51,6 +52,16 @@ onMounted(async () => {
   onBeforeUnmount(() => {
     unlisten();
   });
+
+  // 启动 5 秒后后台检查文件完整性（不影响 UI 性能）
+  setTimeout(async () => {
+    try {
+      await invoke("check_and_mark_invalid_files");
+    } catch (e) {
+      // 静默处理，不阻塞用户体验
+      console.debug("Background file check skipped:", e);
+    }
+  }, 5000);
 });
 
 onBeforeUnmount(() => {

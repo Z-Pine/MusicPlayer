@@ -27,6 +27,7 @@ pub struct Song {
     pub bitrate: Option<i32>,
     pub sample_rate: Option<i32>,
     pub is_available: bool,
+    pub deleted_from_library: bool,
     pub updated_at: i64,
 }
 
@@ -82,4 +83,22 @@ pub struct PlaybackState {
 pub struct LyricLine {
     pub time: f64,
     pub text: String,
+}
+
+/// 文件完整性检查结果
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckResult {
+    pub checked: i64,
+    pub marked_missing: i64,
+    pub marked_restored: i64,
+}
+
+/// 文件信息
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FileInfo {
+    pub size: i64,
+    pub modified: Option<i64>,
+    pub created: Option<i64>,
 }

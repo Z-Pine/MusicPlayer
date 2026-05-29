@@ -32,6 +32,14 @@
           <span>🔄</span>
           <span>{{ scanning ? "扫描中..." : "扫描" }}</span>
         </button>
+        <button class="action-btn-compact check-files" @click="checkInvalidFiles" :disabled="checkingFiles">
+          <span>🔍</span>
+          <span>{{ checkingFiles ? "检查中..." : "检查文件" }}</span>
+        </button>
+        <button class="action-btn-compact cleanup" @click="cleanupInvalidSongs" v-if="hasInvalidSongs">
+          <span>🗑️</span>
+          <span>一键清理</span>
+        </button>
       </div>
     </header>
 
@@ -135,6 +143,9 @@
       :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
     >
       <div class="context-menu-item" @click="playSong(contextMenu.song!)">播放</div>
+      <div class="context-menu-item" @click="showSongInfo(contextMenu.song!)">属性</div>
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item delete" @click="deleteSelectedFromLibrary">从音乐库删除</div>
       <div class="context-menu-divider"></div>
       <div class="context-menu-label">添加到歌单</div>
       <div
@@ -154,6 +165,9 @@
     <div v-if="toast.visible" class="toast" :class="{ show: toast.visible }">
       {{ toast.message }}
     </div>
+
+    <!-- 歌曲属性弹窗 -->
+    <SongInfoModal :visible="songInfoVisible" :song="songInfoSong" @close="songInfoVisible = false" />
   </div>
 </template>
 
@@ -163,8 +177,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { usePlayerStore } from "../stores/player";
 import type { Song } from "../stores/player";
 import { formatDuration } from "../utils/format";
+import { useDialog } from "../composables/useDialog";
+import SongInfoModal from "../components/SongInfoModal.vue";
 
 const playerStore = usePlayerStore();
+const dialog = useDialog();
 const songs = ref<Song[]>([]);
 const scanning = ref(false);
 const errorMsg = ref("");
@@ -174,6 +191,24 @@ const searchTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 // 多选歌曲
 const selectedSongIds = ref<Set<number>>(new Set());
 const lastClickedId = ref<number | null>(null);
+
+// 文件检查
+const checkingFiles = ref(false);
+
+// 是否有无效歌曲（不可用或已从音乐库删除）
+const hasInvalidSongs = computed(() =>
+  songs.value.some(s => !s.isAvailable || s.deletedFromLibrary)
+);
+
+// 歌曲属性弹窗
+const songInfoVisible = ref(false);
+const songInfoSong = ref<Song | null>(null);
+
+function showSongInfo(song: Song) {
+  songInfoSong.value = song;
+  songInfoVisible.value = true;
+  closeContextMenu();
+}
 
 // 播放模式相关
 const modeIcon = computed(() => {
@@ -399,6 +434,68 @@ async function addToPlaylist(playlistId: number, playlistName: string) {
 
 function closeContextMenu() {
   contextMenu.value.visible = false;
+}
+
+// 从音乐库删除选中的歌曲
+async function deleteSelectedFromLibrary() {
+  closeContextMenu();
+  const ids = Array.from(selectedSongIds.value);
+  if (ids.length === 0) return;
+
+  const confirmed = await dialog.confirm({
+    title: '确认删除',
+    message: `确定要从音乐库中删除 ${ids.length} 首歌曲吗？\n\n注意：这不会删除实际的音乐文件，歌单中的歌曲仍会保留。`,
+    type: 'warning',
+    confirmText: '删除',
+    cancelText: '取消',
+  });
+  if (!confirmed) return;
+
+  try {
+    await invoke("batch_delete_songs_from_library", { ids });
+    showToast(`已从音乐库删除 ${ids.length} 首歌曲`);
+    selectedSongIds.value.clear();
+    await fetchSongs();
+  } catch (e) {
+    console.error("Failed to delete songs:", e);
+    await dialog.error("删除失败: " + String(e));
+  }
+}
+
+// 检查文件完整性
+async function checkInvalidFiles() {
+  checkingFiles.value = true;
+  try {
+    const result = await invoke<{ checked: number; markedMissing: number; markedRestored: number }>("check_and_mark_invalid_files");
+    showToast(`已检查 ${result.checked} 首歌曲，${result.markedMissing} 首文件缺失`);
+    await fetchSongs();
+  } catch (e) {
+    console.error("Failed to check files:", e);
+    await dialog.error("文件检查失败: " + String(e));
+  } finally {
+    checkingFiles.value = false;
+  }
+}
+
+// 一键清理无效歌曲
+async function cleanupInvalidSongs() {
+  const confirmed = await dialog.confirm({
+    title: '确认清理',
+    message: '确定要清理所有无效歌曲吗？将从数据库中物理删除这些记录。',
+    type: 'warning',
+    confirmText: '清理',
+    cancelText: '取消',
+  });
+  if (!confirmed) return;
+
+  try {
+    const count = await invoke<number>("cleanup_invalid_songs");
+    showToast(`已清理 ${count} 首无效歌曲`);
+    await fetchSongs();
+  } catch (e) {
+    console.error("Failed to cleanup:", e);
+    await dialog.error("清理失败: " + String(e));
+  }
 }
 
 // 点击空白处关闭菜单
@@ -818,6 +915,29 @@ onMounted(() => {
 .action-btn-compact.scan:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.action-btn-compact.check-files {
+  background-color: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+}
+
+.action-btn-compact.check-files:hover:not(:disabled) {
+  background-color: rgba(251, 191, 36, 0.25);
+}
+
+.action-btn-compact.check-files:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-btn-compact.cleanup {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.action-btn-compact.cleanup:hover {
+  background-color: rgba(239, 68, 68, 0.25);
 }
 
 .error-msg {
@@ -1261,6 +1381,14 @@ onMounted(() => {
   background-color: transparent;
 }
 
+.context-menu-item.delete {
+  color: #ef4444;
+}
+
+.context-menu-item.delete:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
 .context-menu-item.pl-item {
   padding-left: 24px;
   font-size: 13px;
@@ -1303,122 +1431,3 @@ onMounted(() => {
   transform: translateX(-50%) translateY(0);
 }
 </style>
-
-
-.action-btn-compact.play-all {
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  color: white;
-}
-
-.action-btn-compact.play-all:hover {
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-  transform: translateY(-1px);
-}
-
-.action-btn-compact.shuffle {
-  background: rgba(255, 255, 255, 0.08);
-  color: #e2e8f0;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.action-btn-compact.shuffle:hover {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.action-btn-compact.scan {
-  background-color: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-}
-
-.action-btn-compact.scan:hover:not(:disabled) {
-  background-color: rgba(16, 185, 129, 0.25);
-}
-
-.action-btn-compact.scan:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.empty-tip {
-  padding: 40px;
-  text-align: center;
-  color: #64748b;
-  font-size: 14px;
-}
-
-/* 上下文菜单 */
-.context-menu {
-  position: fixed;
-  background-color: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 6px 0;
-  min-width: 180px;
-  max-height: 320px;
-  overflow-y: auto;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 1000;
-}
-
-.context-menu-item {
-  padding: 8px 16px;
-  font-size: 14px;
-  color: #e2e8f0;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.context-menu-item:hover {
-  background-color: rgba(59, 130, 246, 0.2);
-}
-
-.context-menu-item.disabled {
-  color: #64748b;
-  cursor: default;
-}
-
-.context-menu-item.disabled:hover {
-  background-color: transparent;
-}
-
-.context-menu-item.pl-item {
-  padding-left: 24px;
-  font-size: 13px;
-}
-
-.context-menu-divider {
-  height: 1px;
-  background-color: rgba(255, 255, 255, 0.08);
-  margin: 4px 0;
-}
-
-.context-menu-label {
-  padding: 6px 16px;
-  font-size: 12px;
-  color: #64748b;
-  cursor: default;
-}
-
-/* Toast */
-.toast {
-  position: fixed;
-  bottom: 80px;
-  left: 50%;
-  transform: translateX(-50%) translateY(20px);
-  background-color: #1e293b;
-  color: #e2e8f0;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 14px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  border: 1px solid #334155;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.3s, transform 0.3s;
-  z-index: 2000;
-}
-
-.toast.show {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}

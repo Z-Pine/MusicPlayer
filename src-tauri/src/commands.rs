@@ -64,6 +64,50 @@ pub fn mark_song_unavailable(state: State<AppState>, path: String) -> Result<(),
     database::mark_song_unavailable(&conn, &path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn delete_song_from_library(state: State<AppState>, id: i64) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    database::delete_song_from_library(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn batch_delete_songs_from_library(state: State<AppState>, ids: Vec<i64>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    database::batch_delete_songs_from_library(&conn, &ids).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_invalid_songs(state: State<AppState>) -> Result<Vec<Song>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    database::get_invalid_songs(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cleanup_invalid_songs(state: State<AppState>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    database::cleanup_invalid_songs(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn check_and_mark_invalid_files(state: State<AppState>) -> Result<CheckResult, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let (checked, marked_missing, marked_restored) = database::check_and_mark_invalid_files(&conn)
+        .map_err(|e| e.to_string())?;
+    Ok(CheckResult { checked, marked_missing, marked_restored })
+}
+
+#[tauri::command]
+pub fn check_songs_file_exists(state: State<AppState>) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    database::check_songs_file_exists(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cleanup_playlist_invalid_songs(state: State<AppState>, playlistId: i64) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    database::cleanup_playlist_invalid_songs(&conn, playlistId).map_err(|e| e.to_string())
+}
+
 // ==================== Playlists Commands ====================
 
 #[tauri::command]
@@ -270,6 +314,45 @@ pub fn get_lyrics(state: State<AppState>, song_id: i64) -> Result<Vec<LyricLine>
     Ok(Vec::new())
 }
 
+// ==================== File Info Command ====================
+
+#[tauri::command]
+pub fn get_file_info(path: String) -> Result<FileInfo, String> {
+    let metadata = std::fs::metadata(&path).map_err(|e| format!("无法读取文件: {}", e))?;
+    Ok(FileInfo {
+        size: metadata.len() as i64,
+        modified: metadata.modified().ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64),
+        created: metadata.created().ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64),
+    })
+}
+
+#[tauri::command]
+pub fn open_file_location(path: String) -> Result<(), String> {
+    // Windows: 用 explorer /select 打开文件夹并选中该文件
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件位置: {}", e))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| format!("无法打开文件位置: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
 // ==================== Scanner Commands ====================
 
 use walkdir::WalkDir;
@@ -318,6 +401,7 @@ pub fn scan_library(state: State<AppState>) -> Result<i64, String> {
                 bitrate: None,
                 sample_rate: None,
                 is_available: true,
+                deleted_from_library: false,
                 updated_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
